@@ -2,7 +2,13 @@ use ksni::{menu::*, Icon, Tray, TrayMethods};
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
-const EXIT_NODE: &str = "100.106.114.83";
+fn read_exit_node() -> String {
+    let path = std::env::var("HOME").expect("HOME not set") + "/.config/ts-switcher/exit_node.env";
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Failed to read {path}: {e}"))
+        .trim()
+        .to_string()
+}
 
 fn make_circle(filled: bool) -> Icon {
     const SIZE: i32 = 16;
@@ -81,15 +87,16 @@ async fn tailscale_is_enabled() -> bool {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let exit_node = read_exit_node();
     let enabled = tailscale_is_enabled().await;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let handle: ksni::Handle<AppTray> = AppTray { enabled, tx }.spawn().await.unwrap();
 
     while let Some(enable) = rx.recv().await {
-        let args: &[&str] = if enable {
-            &["tailscale", "up", "--exit-node", EXIT_NODE]
+        let args: Vec<&str> = if enable {
+            vec!["tailscale", "up", "--exit-node", &exit_node]
         } else {
-            &["tailscale", "down"]
+            vec!["tailscale", "down"]
         };
 
         let success = Command::new("pkexec")
