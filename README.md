@@ -14,13 +14,12 @@ A GNOME system tray applet to manage Tailscale exit nodes.
   - Offline exit nodes listed below a separator, greyed out
 - Exit nodes are read automatically from `tailscale exit-node list` at startup and after each toggle
 - Switching nodes runs `tailscale up --exit-node <IP>`, disabling runs `tailscale down`
-- Both commands require administrator privileges — a GNOME authentication dialog will appear automatically
+- No administrator privileges required at runtime (see Prerequisites below)
 
 ## Requirements
 
 - GNOME with the [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/) extension enabled
 - `tailscale` installed and on your `PATH`
-- `pkexec` (ships with polkit, present on any standard Fedora/GNOME install)
 - Rust toolchain (`cargo`)
 - System packages: `dbus-devel`, `pkgconf-pkg-config`
 
@@ -29,6 +28,16 @@ On Fedora:
 ```bash
 sudo dnf install dbus-devel pkgconf-pkg-config
 ```
+
+## Prerequisites
+
+Grant your user permission to control Tailscale without sudo (one-time setup):
+
+```bash
+sudo tailscale set --operator=$USER
+```
+
+This allows `tailscale up` and `tailscale down` to run as your regular user, which is required for the tray applet to work.
 
 ## Building
 

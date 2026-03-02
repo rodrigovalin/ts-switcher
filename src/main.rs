@@ -245,8 +245,8 @@ async fn main() {
             Some(ip) => vec!["tailscale", "up", "--exit-node", ip.as_str()],
         };
 
-        let success = Command::new("pkexec")
-            .args(&args)
+        let success = Command::new(args[0])
+            .args(&args[1..])
             .status()
             .await
             .map(|s| s.success())
