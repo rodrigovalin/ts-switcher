@@ -5,4 +5,6 @@ edition = "2024"
 
 [dependencies]
 ksni = "0.3"
-tokio = { version = "1", features = ["rt", "macros", "process", "sync"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "process", "sync", "time"] }

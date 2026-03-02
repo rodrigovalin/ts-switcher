@@ -1,4 +1,5 @@
 use ksni::{menu::*, Icon, Tray, TrayMethods};
+use reqwest::Client;
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -41,9 +42,54 @@ fn make_circle(filled: bool) -> Icon {
     Icon { width: SIZE, height: SIZE, data }
 }
 
+async fn fetch_location(client: &Client) -> String {
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        eprintln!("[fetch_location] attempt {}/3...", attempt + 1);
+        let result = async {
+            let resp = client
+                .get("https://ipinfo.io/json")
+                .timeout(std::time::Duration::from_secs(2))
+                .send()
+                .await?
+                .json::<serde_json::Value>()
+                .await?;
+
+            let ip = resp["ip"].as_str().unwrap_or("?");
+            let city = resp["city"].as_str().unwrap_or("?");
+            let country = resp["country"].as_str().unwrap_or("?");
+
+            Ok::<String, reqwest::Error>(format!("{ip} ({city}, {country})"))
+        }
+        .await;
+
+        match result {
+            Ok(location) => {
+                eprintln!("[fetch_location] got: {location}");
+                return location;
+            }
+            Err(e) => eprintln!("[fetch_location] failed: {e}"),
+        }
+    }
+    eprintln!("[fetch_location] all attempts failed, giving up");
+    "Unknown location".into()
+}
+
+async fn tailscale_is_enabled() -> bool {
+    Command::new("tailscale")
+        .arg("status")
+        .output()
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() != "Tailscale is stopped.")
+        .unwrap_or(false)
+}
+
 #[derive(Debug)]
 struct AppTray {
     enabled: bool,
+    location: String,
     tx: UnboundedSender<bool>,
 }
 
@@ -58,12 +104,20 @@ impl Tray for AppTray {
 
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         vec![
+            StandardItem {
+                label: self.location.clone(),
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
             CheckmarkItem {
                 label: "Disabled".into(),
                 checked: !self.enabled,
                 activate: Box::new(|this: &mut Self| {
                     if this.enabled {
                         this.enabled = false;
+                        this.location = "Fetching...".into();
                         let _ = this.tx.send(false);
                     }
                 }),
@@ -76,6 +130,7 @@ impl Tray for AppTray {
                 activate: Box::new(|this: &mut Self| {
                     if !this.enabled {
                         this.enabled = true;
+                        this.location = "Fetching...".into();
                         let _ = this.tx.send(true);
                     }
                 }),
@@ -86,21 +141,19 @@ impl Tray for AppTray {
     }
 }
 
-async fn tailscale_is_enabled() -> bool {
-    Command::new("tailscale")
-        .arg("status")
-        .output()
-        .await
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() != "Tailscale is stopped.")
-        .unwrap_or(false)
-}
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let exit_node = read_exit_node();
-    let enabled = tailscale_is_enabled().await;
+    let client = Client::new();
+
+    let (enabled, location) =
+        tokio::join!(tailscale_is_enabled(), fetch_location(&client));
+
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let handle: ksni::Handle<AppTray> = AppTray { enabled, tx }.spawn().await.unwrap();
+    let handle: ksni::Handle<AppTray> =
+        AppTray { enabled, location: location.clone(), tx }.spawn().await.unwrap();
+
+    let mut confirmed_location = location;
 
     while let Some(enable) = rx.recv().await {
         let args: Vec<&str> = if enable {
@@ -116,8 +169,19 @@ async fn main() {
             .map(|s| s.success())
             .unwrap_or(false);
 
-        if !success {
-            handle.update(|tray: &mut AppTray| tray.enabled = !enable).await;
+        if success {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            let new_location = fetch_location(&client).await;
+            confirmed_location = new_location.clone();
+            let _ = handle.update(|tray: &mut AppTray| tray.location = new_location).await;
+        } else {
+            let rollback_location = confirmed_location.clone();
+            let _ = handle
+                .update(|tray: &mut AppTray| {
+                    tray.enabled = !enable;
+                    tray.location = rollback_location;
+                })
+                .await;
         }
     }
 }
