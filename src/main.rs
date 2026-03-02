@@ -43,6 +43,14 @@ fn make_circle(filled: bool) -> Icon {
     Icon { width: SIZE, height: SIZE, data }
 }
 
+fn country_flag(code: &str) -> String {
+    code.to_uppercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .map(|c| char::from_u32(0x1F1E6 + (c as u32 - 'A' as u32)).unwrap_or(c))
+        .collect()
+}
+
 fn parse_exit_nodes(output: &str) -> Vec<ExitNode> {
     output
         .lines()
@@ -125,8 +133,9 @@ async fn fetch_location(client: &Client) -> String {
             let ip = resp["ip"].as_str().unwrap_or("?");
             let city = resp["city"].as_str().unwrap_or("?");
             let country = resp["country"].as_str().unwrap_or("?");
+            let flag = country_flag(country);
 
-            Ok::<String, reqwest::Error>(format!("{ip} ({city}, {country})"))
+            Ok::<String, reqwest::Error>(format!("{ip} ({city}, {flag})"))
         }
         .await;
 
