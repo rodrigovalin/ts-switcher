@@ -1,6 +1,6 @@
 [package]
 name = "ts-switcher"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 description = "GNOME system tray applet to manage Tailscale exit nodes"
 license = "MIT"
