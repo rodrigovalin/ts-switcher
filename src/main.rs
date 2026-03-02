@@ -249,14 +249,22 @@ async fn main() {
         tokio::join!(fetch_exit_nodes(), fetch_location(&client));
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<String>>();
-    let handle: ksni::Handle<AppTray> = AppTray {
-        exit_nodes: exit_nodes.clone(),
-        location: location.clone(),
-        tx,
-    }
-    .spawn()
-    .await
-    .unwrap();
+    let handle: ksni::Handle<AppTray> = loop {
+        match (AppTray {
+            exit_nodes: exit_nodes.clone(),
+            location: location.clone(),
+            tx: tx.clone(),
+        })
+        .spawn()
+        .await
+        {
+            Ok(h) => break h,
+            Err(e) => {
+                eprintln!("[spawn] StatusNotifierWatcher not ready, retrying in 2s... ({e})");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        }
+    };
 
     let mut confirmed_location = location;
     let mut exit_nodes = exit_nodes.clone();
