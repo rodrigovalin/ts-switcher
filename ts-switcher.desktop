@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=ts-switcher
+Comment=Tailscale exit node switcher
+Exec=/usr/bin/ts-switcher
+X-GNOME-Autostart-enabled=true
+NoDisplay=true

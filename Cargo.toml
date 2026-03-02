@@ -18,12 +18,14 @@ section = "net"
 priority = "optional"
 assets = [
     ["target/release/ts-switcher", "usr/bin/", "755"],
+    ["ts-switcher.desktop", "etc/xdg/autostart/", "644"],
     ["README.md", "usr/share/doc/ts-switcher/README.md", "644"],
 ]
 
 [package.metadata.generate-rpm]
 assets = [
     { source = "target/release/ts-switcher", dest = "/usr/bin/ts-switcher", mode = "755" },
+    { source = "ts-switcher.desktop", dest = "/etc/xdg/autostart/ts-switcher.desktop", mode = "644" },
     { source = "README.md", dest = "/usr/share/doc/ts-switcher/README.md", mode = "644" },
 ]
 [package.metadata.generate-rpm.requires]
