@@ -1,14 +1,19 @@
 # ts-switcher
 
-A GNOME system tray applet to toggle a Tailscale exit node on and off.
+A GNOME system tray applet to manage Tailscale exit nodes.
 
 ## What it does
 
 - Shows a grey circle icon in the GNOME top bar
-  - **Hollow circle** — exit node is disabled (Tailscale is stopped)
-  - **Filled circle** — exit node is enabled
-- Clicking the icon opens a menu to switch between **Disabled** and **Enabled**
-- Enabling runs `tailscale up --exit-node <IP>`, disabling runs `tailscale down`
+  - **Hollow circle** — no exit node active (Tailscale is stopped)
+  - **Filled circle** — an exit node is active
+- Clicking the icon opens a menu showing:
+  - The current external IP and location
+  - A **Disabled** option to stop Tailscale
+  - Available (online) exit nodes to switch to
+  - Offline exit nodes listed below a separator, greyed out
+- Exit nodes are read automatically from `tailscale exit-node list` at startup and after each toggle
+- Switching nodes runs `tailscale up --exit-node <IP>`, disabling runs `tailscale down`
 - Both commands require administrator privileges — a GNOME authentication dialog will appear automatically
 
 ## Requirements
@@ -24,17 +29,6 @@ On Fedora:
 ```bash
 sudo dnf install dbus-devel pkgconf-pkg-config
 ```
-
-## Configuration
-
-Create the config file with your exit node IP address:
-
-```bash
-mkdir -p ~/.config/ts-switcher
-echo "100.x.x.x" > ~/.config/ts-switcher/exit_node.env
-```
-
-The file must contain a single line with the IP address of your Tailscale exit node. The app will not start if this file is missing.
 
 ## Building
 

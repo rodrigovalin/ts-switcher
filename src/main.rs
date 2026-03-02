@@ -3,12 +3,12 @@ use reqwest::Client;
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
-fn read_exit_node() -> String {
-    let path = std::env::var("HOME").expect("HOME not set") + "/.config/ts-switcher/exit_node.env";
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("Failed to read {path}: {e}"))
-        .trim()
-        .to_string()
+#[derive(Debug, Clone)]
+struct ExitNode {
+    ip: String,
+    hostname: String,
+    is_active: bool,    // currently in use (STATUS starts with "selected" and tailscale is running)
+    is_available: bool, // online and can be selected (STATUS does not start with "offline")
 }
 
 fn make_circle(filled: bool) -> Icon {
@@ -40,6 +40,60 @@ fn make_circle(filled: bool) -> Icon {
     }
 
     Icon { width: SIZE, height: SIZE, data }
+}
+
+fn parse_exit_nodes(output: &str) -> Vec<ExitNode> {
+    output
+        .lines()
+        .filter(|line| {
+            let t = line.trim();
+            !t.is_empty() && !t.starts_with('#') && !t.starts_with("IP")
+        })
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let ip = parts.next()?.to_string();
+            let hostname = parts.next()?.to_string();
+            let _country = parts.next()?;
+            let _city = parts.next()?;
+            let status = parts.collect::<Vec<_>>().join(" ");
+            Some(ExitNode {
+                ip,
+                hostname,
+                is_active: status.starts_with("selected"),
+                is_available: !status.starts_with("offline"),
+            })
+        })
+        .collect()
+}
+
+async fn tailscale_is_running() -> bool {
+    Command::new("tailscale")
+        .arg("status")
+        .output()
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() != "Tailscale is stopped.")
+        .unwrap_or(false)
+}
+
+async fn fetch_exit_nodes() -> Vec<ExitNode> {
+    let (list_output, running) =
+        tokio::join!(Command::new("tailscale").args(["exit-node", "list"]).output(), tailscale_is_running());
+
+    match list_output {
+        Ok(output) => {
+            let mut nodes = parse_exit_nodes(&String::from_utf8_lossy(&output.stdout));
+            if !running {
+                for node in &mut nodes {
+                    node.is_active = false;
+                }
+            }
+            nodes
+        }
+        Err(e) => {
+            eprintln!("[fetch_exit_nodes] failed: {e}");
+            vec![]
+        }
+    }
 }
 
 async fn fetch_location(client: &Client) -> String {
@@ -77,20 +131,17 @@ async fn fetch_location(client: &Client) -> String {
     "Unknown location".into()
 }
 
-async fn tailscale_is_enabled() -> bool {
-    Command::new("tailscale")
-        .arg("status")
-        .output()
-        .await
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() != "Tailscale is stopped.")
-        .unwrap_or(false)
-}
-
 #[derive(Debug)]
 struct AppTray {
-    enabled: bool,
+    exit_nodes: Vec<ExitNode>,
     location: String,
-    tx: UnboundedSender<bool>,
+    tx: UnboundedSender<Option<String>>,
+}
+
+impl AppTray {
+    fn is_enabled(&self) -> bool {
+        self.exit_nodes.iter().any(|n| n.is_active)
+    }
 }
 
 impl Tray for AppTray {
@@ -99,11 +150,15 @@ impl Tray for AppTray {
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
-        vec![make_circle(self.enabled)]
+        vec![make_circle(self.is_enabled())]
     }
 
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
-        vec![
+        let enabled = self.is_enabled();
+        let (selectable, unselectable): (Vec<&ExitNode>, Vec<&ExitNode>) =
+            self.exit_nodes.iter().partition(|n| n.is_available);
+
+        let mut items: Vec<ksni::MenuItem<Self>> = vec![
             StandardItem {
                 label: self.location.clone(),
                 enabled: false,
@@ -113,57 +168,85 @@ impl Tray for AppTray {
             MenuItem::Separator,
             CheckmarkItem {
                 label: "Disabled".into(),
-                checked: !self.enabled,
+                checked: !enabled,
                 activate: Box::new(|this: &mut Self| {
-                    if this.enabled {
-                        this.enabled = false;
+                    if this.is_enabled() {
+                        for node in &mut this.exit_nodes {
+                            node.is_active = false;
+                        }
                         this.location = "Fetching...".into();
-                        let _ = this.tx.send(false);
+                        let _ = this.tx.send(None);
                     }
                 }),
                 ..Default::default()
             }
             .into(),
-            CheckmarkItem {
-                label: "Enabled".into(),
-                checked: self.enabled,
-                activate: Box::new(|this: &mut Self| {
-                    if !this.enabled {
-                        this.enabled = true;
+        ];
+
+        for node in selectable {
+            let ip = node.ip.clone();
+            items.push(
+                CheckmarkItem {
+                    label: node.hostname.clone(),
+                    checked: node.is_active,
+                    activate: Box::new(move |this: &mut Self| {
+                        for n in &mut this.exit_nodes {
+                            n.is_active = n.ip == ip;
+                        }
                         this.location = "Fetching...".into();
-                        let _ = this.tx.send(true);
+                        let _ = this.tx.send(Some(ip.clone()));
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+
+        if !unselectable.is_empty() {
+            items.push(MenuItem::Separator);
+            for node in unselectable {
+                items.push(
+                    StandardItem {
+                        label: node.hostname.clone(),
+                        enabled: false,
+                        ..Default::default()
                     }
-                }),
-                ..Default::default()
+                    .into(),
+                );
             }
-            .into(),
-        ]
+        }
+
+        items
     }
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let exit_node = read_exit_node();
     let client = Client::new();
 
-    let (enabled, location) =
-        tokio::join!(tailscale_is_enabled(), fetch_location(&client));
+    let (exit_nodes, location) =
+        tokio::join!(fetch_exit_nodes(), fetch_location(&client));
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let handle: ksni::Handle<AppTray> =
-        AppTray { enabled, location: location.clone(), tx }.spawn().await.unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<String>>();
+    let handle: ksni::Handle<AppTray> = AppTray {
+        exit_nodes,
+        location: location.clone(),
+        tx,
+    }
+    .spawn()
+    .await
+    .unwrap();
 
     let mut confirmed_location = location;
 
-    while let Some(enable) = rx.recv().await {
-        let args: Vec<&str> = if enable {
-            vec!["tailscale", "up", "--exit-node", &exit_node]
-        } else {
-            vec!["tailscale", "down"]
+    while let Some(action) = rx.recv().await {
+        let args: Vec<&str> = match &action {
+            None => vec!["tailscale", "down"],
+            Some(ip) => vec!["tailscale", "up", "--exit-node", ip.as_str()],
         };
 
         let success = Command::new("pkexec")
-            .args(args)
+            .args(&args)
             .status()
             .await
             .map(|s| s.success())
@@ -171,14 +254,21 @@ async fn main() {
 
         if success {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            let new_location = fetch_location(&client).await;
+            let (new_nodes, new_location) =
+                tokio::join!(fetch_exit_nodes(), fetch_location(&client));
             confirmed_location = new_location.clone();
-            let _ = handle.update(|tray: &mut AppTray| tray.location = new_location).await;
+            let _ = handle
+                .update(|tray: &mut AppTray| {
+                    tray.exit_nodes = new_nodes;
+                    tray.location = new_location;
+                })
+                .await;
         } else {
+            let old_nodes = fetch_exit_nodes().await;
             let rollback_location = confirmed_location.clone();
             let _ = handle
                 .update(|tray: &mut AppTray| {
-                    tray.enabled = !enable;
+                    tray.exit_nodes = old_nodes;
                     tray.location = rollback_location;
                 })
                 .await;
