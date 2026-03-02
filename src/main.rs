@@ -58,17 +58,27 @@ impl Tray for AppTray {
 
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         vec![
-            RadioGroup {
-                selected: self.enabled as usize,
-                select: Box::new(|this: &mut Self, index| {
-                    let enable = index != 0;
-                    this.enabled = enable; // optimistic update
-                    let _ = this.tx.send(enable);
+            CheckmarkItem {
+                label: "Disabled".into(),
+                checked: !self.enabled,
+                activate: Box::new(|this: &mut Self| {
+                    if this.enabled {
+                        this.enabled = false;
+                        let _ = this.tx.send(false);
+                    }
                 }),
-                options: vec![
-                    RadioItem { label: "Disabled".into(), ..Default::default() },
-                    RadioItem { label: "Enabled".into(), ..Default::default() },
-                ],
+                ..Default::default()
+            }
+            .into(),
+            CheckmarkItem {
+                label: "Enabled".into(),
+                checked: self.enabled,
+                activate: Box::new(|this: &mut Self| {
+                    if !this.enabled {
+                        this.enabled = true;
+                        let _ = this.tx.send(true);
+                    }
+                }),
                 ..Default::default()
             }
             .into(),
