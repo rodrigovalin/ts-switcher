@@ -2,6 +2,8 @@
 name = "ts-switcher"
 version = "0.1.0"
 edition = "2024"
+description = "GNOME system tray applet to manage Tailscale exit nodes"
+license = "MIT"
 
 [dependencies]
 ksni = "0.3"
@@ -9,3 +11,20 @@ notify-rust = { version = "4", features = ["z"] }
 reqwest = { version = "0.12", features = ["json"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros", "process", "sync", "time"] }
+
+[package.metadata.deb]
+depends = "libc6, libdbus-1-3"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/ts-switcher", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/ts-switcher/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/ts-switcher", dest = "/usr/bin/ts-switcher", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/ts-switcher/README.md", mode = "644" },
+]
+[package.metadata.generate-rpm.requires]
+dbus-libs = "*"
