@@ -1,4 +1,5 @@
 use ksni::{menu::*, Icon, Tray, TrayMethods};
+use notify_rust::Notification;
 use reqwest::Client;
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
@@ -64,6 +65,16 @@ fn parse_exit_nodes(output: &str) -> Vec<ExitNode> {
             })
         })
         .collect()
+}
+
+async fn notify(summary: &str, body: &str, icon: &str) {
+    let _ = Notification::new()
+        .appname("ts-switcher")
+        .summary(summary)
+        .body(body)
+        .icon(icon)
+        .show_async()
+        .await;
 }
 
 async fn tailscale_is_running() -> bool {
@@ -229,7 +240,7 @@ async fn main() {
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<String>>();
     let handle: ksni::Handle<AppTray> = AppTray {
-        exit_nodes,
+        exit_nodes: exit_nodes.clone(),
         location: location.clone(),
         tx,
     }
@@ -238,6 +249,7 @@ async fn main() {
     .unwrap();
 
     let mut confirmed_location = location;
+    let mut exit_nodes = exit_nodes.clone();
 
     while let Some(action) = rx.recv().await {
         let args: Vec<&str> = match &action {
@@ -253,9 +265,21 @@ async fn main() {
             .unwrap_or(false);
 
         if success {
+            match &action {
+                None => notify("Tailscale", "Exit node disconnected", "network-offline").await,
+                Some(ip) => {
+                    let hostname = exit_nodes
+                        .iter()
+                        .find(|n| &n.ip == ip)
+                        .map(|n| n.hostname.as_str())
+                        .unwrap_or(ip.as_str());
+                    notify("Tailscale", &format!("Connected via {hostname}"), "network-vpn").await;
+                }
+            }
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             let (new_nodes, new_location) =
                 tokio::join!(fetch_exit_nodes(), fetch_location(&client));
+            exit_nodes = new_nodes.clone();
             confirmed_location = new_location.clone();
             let _ = handle
                 .update(|tray: &mut AppTray| {
@@ -264,6 +288,17 @@ async fn main() {
                 })
                 .await;
         } else {
+            match &action {
+                None => notify("Tailscale", "Failed to disconnect", "dialog-error").await,
+                Some(ip) => {
+                    let hostname = exit_nodes
+                        .iter()
+                        .find(|n| &n.ip == ip)
+                        .map(|n| n.hostname.as_str())
+                        .unwrap_or(ip.as_str());
+                    notify("Tailscale", &format!("Failed to connect via {hostname}"), "dialog-error").await;
+                }
+            }
             let old_nodes = fetch_exit_nodes().await;
             let rollback_location = confirmed_location.clone();
             let _ = handle
