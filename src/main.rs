@@ -164,6 +164,7 @@ impl Tray for AppTray {
         vec![make_circle(self.is_enabled())]
     }
 
+
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         let enabled = self.is_enabled();
         let (selectable, unselectable): (Vec<&ExitNode>, Vec<&ExitNode>) =
@@ -250,8 +251,24 @@ async fn main() {
 
     let mut confirmed_location = location;
     let mut exit_nodes = exit_nodes.clone();
+    let mut refresh = tokio::time::interval(std::time::Duration::from_secs(60));
+    refresh.tick().await; // skip the immediate first tick
 
-    while let Some(action) = rx.recv().await {
+    loop {
+        let action = tokio::select! {
+            Some(a) = rx.recv() => a,
+            _ = refresh.tick() => {
+                let (new_nodes, new_location) =
+                    tokio::join!(fetch_exit_nodes(), fetch_location(&client));
+                exit_nodes = new_nodes.clone();
+                confirmed_location = new_location.clone();
+                let _ = handle.update(|tray: &mut AppTray| {
+                    tray.exit_nodes = new_nodes;
+                    tray.location = new_location;
+                }).await;
+                continue;
+            }
+        };
         let args: Vec<&str> = match &action {
             None => vec!["tailscale", "down"],
             Some(ip) => vec!["tailscale", "up", "--exit-node", ip.as_str()],
